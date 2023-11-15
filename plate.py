@@ -199,10 +199,10 @@ class PlateReader:
 
 # Load models, check conflicts with opencv !
 detector = PlateDetector()
-detector.load_model('detection/yolov3-detection_final.weights', 'detection/yolov3-detection.cfg')
+detector.load_model('weights/yolov3-detection_final.weights', 'weights/yolov3-detection.cfg')
 
 reader = PlateReader()
-reader.load_model('ocr/yolov3-ocr_final.weights', 'ocr/yolov3-ocr.cfg')
+reader.load_model('weights/yolov3-ocr_final.weights', 'weights/yolov3-ocr.cfg')
 
 """
 ## Integrated Processing Pipeline
