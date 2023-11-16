@@ -11,7 +11,9 @@ pip install -r requirements.txt
 
 ## Grab the weights
 You also need the pretrained weights found int the [link](https://drive.google.com/drive/folders/1FBc5z_iHjGU9XDnS7Lp2ViPi4LUG4ozG?usp=sharing "Gdrive link")
+
 Download those two files to your computer and add them to ./weights/ folder. 
+
 weights folder should have 2 config files and 2 weights files by the end of this operation.
 
 ## Usage
@@ -35,7 +37,8 @@ python3 plate.py
 - Edge cases for ww cars, latin cars
 - Edge cases for empty images, skewed
 - Our own locally trained model on UM6P dataset
-- Vehicle detection and BB detection 
+- Vehicle detection and BB detection
+- Support for video 15fps to 30fps
 - Dockerize the project
   
 ## Contributing
