@@ -1,10 +1,8 @@
 import tkinter as tk
-from tkinter import ttk
-from tkvideo import tkvideo
-import threading
 import cv2
 from PIL import Image, ImageTk
 import os
+import re
 
 from plate_detector import PlateDetector
 from plate_reader import PlateReader
@@ -15,6 +13,9 @@ class MainApplication(tk.Frame):
         self.master = master
         self.pack(fill="both", expand=True)
 
+        # Initialize the video_frame attribute
+        self.video_frame = None
+
         # Initialize plate detector and reader
         self.detector = PlateDetector()
         self.detector.load_model('weights/yolov3-detection_final.weights', 'weights/yolov3-detection.cfg')
@@ -23,19 +24,21 @@ class MainApplication(tk.Frame):
 
         # UI Elements
         self.setup_ui()
-        
-        # Video Player
-        self.video_label = tk.Label(self.video_frame)
-        self.video_label.pack(expand=True, fill="both")
-        self.player = tkvideo("video/Example1.MP4", self.video_label, loop=1, size=(800, 600))
+
+        # Video capture setup
+        self.cap = cv2.VideoCapture('video/Example1.MP4')
+        self.frame_extract_rate = 30  # Extract and process every 'x' frames
+        self.frame_counter = 0
 
         # Control Variables
         self.is_playing = False
-        self.frame_extraction_rate = 30  # Extract a frame every 'x' frames
+        self.after_id = None
+
+        self.detected_plates = [] 
+
 
     def setup_ui(self):
-        self.video_frame = tk.LabelFrame(self, text="Live Plate Detector Demo")
-        self.video_frame.pack(fill="both", expand=True)
+        self.create_video_frame()
 
         self.control_frame = tk.Frame(self)
         self.control_frame.pack(fill="x", expand=False)
@@ -52,58 +55,84 @@ class MainApplication(tk.Frame):
         self.output_text = tk.Text(self, height=10)
         self.output_text.pack(fill="both", expand=True)
 
+    def create_video_frame(self):
+        if self.video_frame is not None:
+            self.video_frame.destroy()
+        self.video_frame = tk.LabelFrame(self, text="Live Plate Detector Demo")
+        self.video_frame.pack(fill="both", expand=True)
+        self.video_label = tk.Label(self.video_frame)
+        self.video_label.pack(expand=True, fill="both")
+
     def start_video(self):
+        if self.is_playing:
+            return
         self.is_playing = True
         self.start_button["state"] = "disabled"
         self.stop_button["state"] = "normal"
-        self.player.play()
         self.update_video_frame()
 
     def update_video_frame(self):
         if self.is_playing:
-            frame = self.player.get_frame()  # Get the current frame
-            if frame is not None:
-                self.process_current_frame(frame)
-            self.master.after(30, self.update_video_frame)  # 30 milliseconds
+            ret, frame = self.cap.read()
+            if ret:
+                self.frame_counter += 1
+                if self.frame_counter >= self.frame_extract_rate:
+                    self.frame_counter = 0
+                    self.process_current_frame(frame)
+
+                # Display the frame
+                frame = cv2.resize(frame, (800, 600))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_image = Image.fromarray(frame)
+                frame_photo = ImageTk.PhotoImage(image=frame_image)
+                self.video_label.imgtk = frame_photo
+                self.video_label.configure(image=frame_photo)
+
+            self.after_id = self.master.after(30, self.update_video_frame)
 
     def process_current_frame(self, frame):
         # Save the current frame to a temporary file
-        temp_image_path = 'temp_frame.jpg'
-        frame.save(temp_image_path)
-        
-        # Process the frame for plate detection
-        plate_text = self.process_image(temp_image_path)
-        self.output_text.insert(tk.END, plate_text + "\n")
-        
-        # Remove the temporary file
-        os.remove(temp_image_path)
+        temp_filename = "temp_frame.jpg"
+        cv2.imwrite(temp_filename, frame)
+
+        # Process the image and display results
+        plate_text = self.process_image(temp_filename)
+        pattern = r'\b\d{4,}[A-Za-z]\d{0,2}\b'
+        if "No plates detected" not in plate_text:
+            matched_plates = re.findall(pattern, plate_text)
+            for plate in matched_plates:
+                if plate not in self.detected_plates:
+                    self.detected_plates.append(plate)
+                    self.output_text.insert(tk.END, plate + "\n")
+
+
+        # Clean up the temporary file
+        os.remove(temp_filename)
 
     def process_image(self, image_path):
-
         img, height, width, channels = self.detector.load_image(image_path)
-
-        # Detect plates
         blob, outputs = self.detector.detect_plates(img)
-        boxes, confidences, class_ids = self.detector.get_boxes(outputs, width, height, threshold=0.3)
+        boxes, confidences, class_ids = self.detector.get_boxes(outputs, width, height)
         plate_img, LpImg = self.detector.draw_labels(boxes, confidences, class_ids, img)
 
-        # Check if any plates were detected
         if not LpImg:
-            return "No plates detected. Try to change Camera angle or Lighting Conditions"
+            return "No plates detected. Try to change camera angle or lighting conditions."
 
-        # Perform OCR on the first detected plate
-        ocr_image = LpImg[0]  # assuming the first detected plate
+        ocr_image = LpImg[0]
         blob, outputs = self.reader.read_plate(ocr_image)
-        boxes, confidences, class_ids = self.reader.get_boxes(outputs, width, height, threshold=0.3)
+        boxes, confidences, class_ids = self.reader.get_boxes(outputs, width, height)
         segmented, plate_text = self.reader.draw_labels(boxes, confidences, class_ids, ocr_image)
-
-        # Return OCR result
         return plate_text
 
     def stop_video(self):
         self.is_playing = False
+        if self.after_id:
+            self.master.after_cancel(self.after_id)
+        if self.cap.isOpened():
+            self.cap.release()  # Release the video capture
         self.start_button["state"] = "normal"
         self.stop_button["state"] = "disabled"
+        self.clear_output()
 
     def clear_output(self):
         self.output_text.delete(1.0, tk.END)
