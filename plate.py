@@ -33,6 +33,8 @@ class PlateDetector:
 
     def load_image(self, img_path):
         img = cv2.imread(img_path)
+        if img is None:
+            raise FileNotFoundError(f"Unable to load image: {img_path}")
         height, width, channels = img.shape
         return img, height, width, channels
 
@@ -42,47 +44,68 @@ class PlateDetector:
         outputs = self.net.forward(self.output_layers)
         return blob, outputs
 
+    def draw_labels(self, boxes, confidences, class_ids, img):
+        indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.1, 0.1)
+        plates = []
+        for i in indexes:
+            try:
+                x, y, w, h = boxes[i]
+                label = str(self.classes[class_ids[i]])
+                crop_img = self.crop_and_resize(img, x, y, w, h)
+                plates.append(crop_img)
+                self.draw_box_and_text(img, x, y, w, h, confidences[i])
+            except Exception as err:
+                print(f"Error processing box {i}: {err}")
+
+        return img, plates
+
+    def crop_and_resize(self, img, x, y, w, h):
+        crop_img = img[y:y+h, x:x+w]
+        return cv2.resize(crop_img, dsize=(470, 110))
+
+    def draw_box_and_text(self, img, x, y, w, h, confidence):
+        font = cv2.FONT_HERSHEY_PLAIN
+        color_green = (0, 255, 0)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color_green, 8)
+        cv2.putText(img, f"{round(confidence, 3) * 100}%", (x + 20, y - 20), font, 12, color_green, 6)
+
     def get_boxes(self, outputs, width, height, threshold=0.3):
         boxes = []
         confidences = []
         class_ids = []
+
         for output in outputs:
             for detection in output:
                 scores = detection[5:]
                 class_id = np.argmax(scores)
                 confidence = scores[class_id]
+
                 if confidence > threshold:
-                    center_x = int(detection[0] * width)
-                    center_y = int(detection[1] * height)
-                    w = int(detection[2] * width)
-                    h = int(detection[3] * height)
-                    x = int(center_x - w / 2)
-                    y = int(center_y - h / 2)
+                    center_x, center_y, w, h = self.extract_box_dimensions(detection, width, height)
+
+                    # Validate box dimensions
+                    x, y, w, h = self.validate_box_dimensions(center_x, center_y, w, h, width, height)
+
                     boxes.append([x, y, w, h])
                     confidences.append(float(confidence))
                     class_ids.append(class_id)
+
         return boxes, confidences, class_ids
 
-    def draw_labels(self, boxes, confidences, class_ids, img):
-        indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.1, 0.1)
-        font = cv2.FONT_HERSHEY_PLAIN
-        plats = []
-        for i in range(len(boxes)):
-            if i in indexes:
-                x, y, w, h = boxes[i]
-                label = str(self.classes[class_ids[i]])
-                color_green = (0, 255, 0)
-                crop_img = img[y:y+h, x:x+w]
-                try:
-                    crop_resized = cv2.resize(crop_img, dsize=(470, 110))
-                    plats.append(crop_resized)
-                    cv2.rectangle(img, (x, y), (x + w, y + h), color_green, 8)
-                    confidence = round(confidences[i], 3) * 100
-                    cv2.putText(img, str(confidence) + "%", (x + 20, y - 20), font, 12, (0, 255, 0), 6)
-                except cv2.error as err:
-                    print(err)
+    def extract_box_dimensions(self, detection, width, height):
+        center_x = int(detection[0] * width)
+        center_y = int(detection[1] * height)
+        w = int(detection[2] * width)
+        h = int(detection[3] * height)
+        return center_x, center_y, w, h
 
-        return img,plats
+    def validate_box_dimensions(self, center_x, center_y, w, h, width, height):
+        x = max(0, min(center_x - w // 2, width - w))
+        y = max(0, min(center_y - h // 2, height - h))
+        w = min(w, width - x)
+        h = min(h, height - y)
+        return x, y, w, h
+
 
 class PlateReader:
     def __init__(self):
@@ -160,6 +183,26 @@ class PlateReader:
             plate += self.convert_to_arabic_if_needed(label)
         return plate
 
+    def convert_to_plate_string(self, characters):
+        plate = ""
+        for label, _ in characters:
+            plate += self.convert_to_arabic_if_needed(label)
+
+        # Handle the specific pattern of numbers followed by 'ww'
+        plate = self.handle_ww_pattern(plate)
+
+        return plate
+
+    def handle_ww_pattern(self, plate):
+        if 'ww' in plate:
+            # Extract the number part before 'ww'
+            number_part = plate.split('ww')[0]
+            # Remove any spaces or decorative elements
+            number_part = ''.join(filter(str.isdigit, number_part))
+            # Reconstruct the plate with 'ww'
+            return number_part + ' ww'
+        return plate
+
     def convert_to_arabic_if_needed(self, label):
         arabic_mappings = {'أ': 'A', 'ب': 'B', 'ج': 'J', 'د': 'D', 'ه': 'H', 'و': 'W', 'ي': 'Y'}
         return arabic_mappings.get(label, label)
@@ -218,8 +261,8 @@ print("Edge cases 1")
 print(process_image('images/Example4.jpg'))
 print(process_image('images/Example5.jpg'))
 print("Edge cases 2")
-#print(process_image('images/Example6.jpg'))
-#print(process_image('images/Example7.jpg'))
+print(process_image('images/Example6.jpg'))
+print(process_image('images/Example7.jpg'))
 print(process_image('images/Example8.jpg'))
 
 
