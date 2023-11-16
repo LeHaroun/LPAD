@@ -85,16 +85,27 @@ class PlateDetector:
         return img,plats
 
 class PlateReader:
+    def __init__(self):
+        self.font = cv2.FONT_HERSHEY_PLAIN
+
     def load_model(self, weight_path: str, cfg_path: str):
         self.net = cv2.dnn.readNet(weight_path, cfg_path)
         with open("classes-ocr.names", "r") as f:
             self.classes = [line.strip() for line in f.readlines()]
         self.layers_names = self.net.getLayerNames()
-        self.output_layers = [self.layers_names[i-1] for i in self.net.getUnconnectedOutLayers()]
+
+        unconnected_layers = self.net.getUnconnectedOutLayers()
+        if unconnected_layers.ndim == 1:  # Scalar indices
+            self.output_layers = [self.layers_names[i - 1] for i in unconnected_layers]
+        else:  # Assume it's an array of indices
+            self.output_layers = [self.layers_names[i[0] - 1] for i in unconnected_layers]
+
         self.colors = np.random.uniform(0, 255, size=(len(self.classes), 3))
 
     def load_image(self, img_path):
         img = cv2.imread(img_path)
+        if img is None:
+            raise FileNotFoundError(f"Image not found: {img_path}")
         height, width, channels = img.shape
         return img, height, width, channels
 
@@ -123,79 +134,45 @@ class PlateReader:
                     boxes.append([x, y, w, h])
                     confidences.append(float(confidence))
                     class_ids.append(class_id)
-
         return boxes, confidences, class_ids
 
     def draw_labels(self, boxes, confidences, class_ids, img):
-        indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.1, 0.1)
-        font = cv2.FONT_HERSHEY_PLAIN
-        c = 0
+        indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
         characters = []
-        for i in range(len(boxes)):
-            if i in indexes:
-                x, y, w, h = boxes[i]
-                label = str(self.classes[class_ids[i]])
-                color = self.colors[i % len(self.colors)]
-                cv2.rectangle(img, (x,y), (x+w, y+h), color, 3)
-                confidence = round(confidences[i], 3) * 100
-                cv2.putText(img, str(confidence) + "%", (x, y - 6), font, 1, color, 2)
-                characters.append((label, x))
-        characters.sort(key=lambda x:x[1])
-        plate = ""
-        for l in characters:
-            plate += l[0]
-        chg = 0
-        for i in range(len(plate)):
-            if plate[i] in ['b', 'h', 'd', 'a']:
-                if plate[i-1] == 'w':
-                    ar = i-1
-                    chg = 2
-                elif plate[i-1] == 'c':
-                    ar = i - 1
-                    chg = 3
-                else:
-                    ar = i
-                    chg = 1
-
-        if chg == 1:
-            plate = plate[:ar] + str(self.arabic_chars(ord(plate[ar])), encoding="utf-8") + plate[ar+1:]
-        if chg == 2:
-            index = 0
-            for i in range(3):
-                index = index + plate[ar+i]
-            plate = plate[:ar] + str(self.arabic_chars(index), encoding="utf-8")  + plate[ar+3:]
-        if chg == 3:
-            index = 0
-            for i in range(2):
-                index = index + plate[ar+i]
-            plate = plate[:ar] + str(self.arabic_chars(index), encoding="utf-8") + plate[ar+2:]
-
+        for i in indexes:
+            box = boxes[i]
+            x, y, w, h = box
+            self.draw_label(img, x, y, w, h, confidences[i], i)
+            label = str(self.classes[class_ids[i]])
+            characters.append((label, x))
+        characters.sort(key=lambda x: x[1])
+        plate = self.convert_to_plate_string(characters)
         return img, plate
 
-    def arabic_chars(self, index):
-        if (index == ord('a')):
-            return "أ".encode("utf-8")
+    def draw_label(self, img, x, y, w, h, confidence, i):
+        color = self.colors[i % len(self.colors)]
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, f"{confidence:.2f}%", (x, y - 6), self.font, 1, color, 2)
 
-        if (index == ord('b')):
-            return "ب".encode("utf-8")
+    def convert_to_plate_string(self, characters):
+        plate = ""
+        for label, _ in characters:
+            plate += self.convert_to_arabic_if_needed(label)
+        return plate
 
-        if (index == 2 * ord('w') + ord('a') or index == ord('w')):
-            return "و".encode("utf-8")
-
-        if (index == ord('d')):
-            return "د".encode("utf-8")
-
-        if (index == ord('h')):
-            return "ه".encode("utf-8")
-
-        if (index == ord('c') + ord('h')):
-            return "ش".encode("utf-8")
+    def convert_to_arabic_if_needed(self, label):
+        arabic_mappings = {'أ': 'A', 'ب': 'B', 'ج': 'J', 'د': 'D', 'ه': 'H', 'و': 'W', 'ي': 'Y'}
+        return arabic_mappings.get(label, label)
 
     def tesseract_ocr(self, image, lang="eng", psm=7):
-        alphanumeric = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        options = "-l {} --psm {} -c tessedit_char_whitelist={}".format(lang, psm, alphanumeric)
-        return pytesseract.image_to_string(image, config=options)
-        #reshape ???
+        try:
+            alphanumeric = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            options = f"-l {lang} --psm {psm} -c tessedit_char_whitelist={alphanumeric}"
+            return pytesseract.image_to_string(image, config=options)
+        except Exception as e:
+            print(f"OCR Error: {e}")
+            return ""
+
 
 # Load models, check conflicts with opencv !
 detector = PlateDetector()
